@@ -1,3 +1,71 @@
+options("repos"= c(CRAN="https://mirrors.tuna.tsinghua.edu.cn/CRAN/"))
+options(BioC_mirror="http://mirrors.ustc.edu.cn/bioc/")
+BiocManager::install("TCGAbiolinks")
+library(TCGAbiolinks)
+#临床数据下载
+clinical <- GDCquery(project = "TCGA-LUAD", 
+                     data.category = "Clinical", 
+                     file.type = "xml")
+
+GDCdownload(clinical)
+cliquery <- GDCprepare_clinic(clinical, clinical.info = "patient")
+colnames(cliquery)[1] <- "Tumor_Sample_Barcode"  ###临床信息下载完毕
+#mRNA表达数据下载
+query <- GDCquery(project = "TCGA-LUAD",
+                  data.category = "Transcriptome Profiling",
+                  data.type = "Gene Expression Quantification",
+                  workflow.type = "HTSeq - Counts")
+GDCdownload(query,
+            method = "api",
+            files.per.chunk = 100) 
+expression_data <- GDCprepare(query = query)
+library(DT)
+library(dplyr)
+library(SummarizedExperiment)
+count_data <- assay(expression_data)  ####下载完成，等待DeSeq2标准化
+class(count_data)
+save(count_data,file="LUAD_mRNA_raw.Rdata")
+
+exprSet <- as.data.frame(count_data)
+exprSet <- as.data.frame(exprSet[,-23])######减除没有突变信息的样本
+text <- as.data.frame(colnames(exprSet))
+save(exprSet,file="LUAD_mRNA_raw_2.Rdata")
+
+metadata= data.table::fread(file = "tp53_input.csv") 
+metadata<- metadata[-1,]
+colnames(metadata) <- c("TCGA_id","sample")
+sample <- factor(metadata$sample,levels = c("wt","mut"),ordered = F)
+table(sample)
+library(DESeq2)
+exprSet <- as.matrix(exprSet)
+dds <-DESeqDataSetFromMatrix(countData=exprSet, 
+                             colData=metadata, 
+                             design=~sample,
+                             tidy=T)
+nrow(dds)
+### 如果一个基因在所有样本中的counts数小于等于1，我们就把他删掉
+dds <- dds[rowSums(counts(dds))>1,]
+nrow(dds)
+vsd <- vst(dds, blind = FALSE)
+plotPCA(vsd, "sample")
+
+exprSet_vst <- as.data.frame(assay(vsd))
+test <- exprSet_vst[1:10,1:10]
+
+library(dplyr)
+library(tibble)
+library(tidyr)
+
+### 最困难的一步来了，DESeq2主程序
+dds <- DESeq(dds)
+save(dds,file = "dds.Rdata")
+### 使用counts函数提取标准化后的数据，用于展示差异表达结果，注意跟热图不一样！！
+normalized_counts <- as.data.frame(counts(dds, normalized=TRUE))
+save(normalized_counts,file = "normalized_counts.Rdata")
+
+
+
+
 load("expr.Rdata")
 clii$n <- gsub("X","0",clii$n)
 clii$n <- gsub("2","1",clii$n)
